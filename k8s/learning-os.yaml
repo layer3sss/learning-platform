@@ -1,0 +1,218 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devops-learning-os
+  labels:
+    app.kubernetes.io/name: devops-learning-os
+    app.kubernetes.io/part-of: devops-os
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: learning-os-config
+  namespace: devops-learning-os
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  POSTGRES_DB: "devops_learning_os"
+  POSTGRES_USER: "devops_admin"
+---
+# NOTE: This manifest intentionally contains NO secret values.
+# Create the real secret locally on the cluster server before deploying:
+#   cp k8s/secret.example.yaml k8s/secret.yaml   (fill in real values)
+#   kubectl apply -f k8s/secret.yaml
+# k8s/secret.yaml is git-ignored; this template is safe to commit.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: learning-os-secret
+  namespace: devops-learning-os
+type: Opaque
+# Values are supplied by k8s/secret.yaml (git-ignored, created on the server).
+# Applying learning-os.yaml alone creates an EMPTY secret; the app will fail
+# its readiness probe until you apply the real values on top of it.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: devops-learning-os
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-deployment
+  namespace: devops-learning-os
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: learning-os-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: learning-os-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: learning-os-secret
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-storage
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: devops-learning-os
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: learning-os-deployment
+  namespace: devops-learning-os
+  labels:
+    app: learning-os
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: learning-os
+  template:
+    metadata:
+      labels:
+        app: learning-os
+    spec:
+      containers:
+        - name: learning-os
+          # Build & load locally first (no external registry needed on a homelab):
+          #   docker build -t devops-learning-os:latest .
+          #   k3s ctr images import <saved-image.tar>   (or push to your own registry)
+          image: devops-learning-os:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: learning-os-config
+                  key: NODE_ENV
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: learning-os-config
+                  key: PORT
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: learning-os-secret
+                  key: DATABASE_URL
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: learning-os-secret
+                  key: AUTH_SECRET
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: learning-os-service
+  namespace: devops-learning-os
+spec:
+  type: ClusterIP
+  selector:
+    app: learning-os
+  ports:
+    - port: 80
+      targetPort: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: learning-os-ingress
+  namespace: devops-learning-os
+  annotations:
+    kubernetes.io/ingress.class: "traefik" # standard default in k3s
+spec:
+  rules:
+    - host: learning-os.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: learning-os-service
+                port:
+                  number: 80

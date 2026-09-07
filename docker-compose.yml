@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: devops_learning_os_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devops_admin}
+      # Local-dev default only; override via .env or shell env for anything exposed.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devops_local_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-devops_learning_os}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - devops_net
+
+  learning-os:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: devops_learning_os_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-devops_admin}:${POSTGRES_PASSWORD:-devops_local_dev_pw}@postgres:5432/${POSTGRES_DB:-devops_learning_os}?schema=public
+      # Local-dev default only; generate a real value with: openssl rand -hex 32
+      AUTH_SECRET: ${AUTH_SECRET:-devops-learning-os-compose-local-dev-secret}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    networks:
+      - devops_net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  devops_net:
+    driver: bridge

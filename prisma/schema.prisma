@@ -1,0 +1,146 @@
+// DevOps Learning OS - Prisma schema
+// This schema mirrors the runtime domain types in src/types.ts exactly.
+// The server auto-creates these tables on boot (see src/server/prismaStore.ts),
+// so `prisma migrate` is optional; `prisma db push` also works.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                 String   @id
+  name               String
+  email              String   @unique
+  password           String
+  role               String   @default("USER")
+  learningPhilosophy String   @default("Learn by building real systems, breaking things, troubleshooting, and mastering concepts through hands-on practice.")
+  preferredMethod    String   @default("Receive mission -> attempt task -> experiment/troubleshoot -> request AI hints if blocked -> submit work for assessment -> record outcome -> advance.")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("users")
+}
+
+model LearningState {
+  id                    String   @id
+  userId                String   @unique
+  currentRoadmapLevel   Int      @default(0)
+  currentLevelTitle     String   @default("")
+  currentProjectId      String?
+  currentProjectTitle   String?
+  currentTaskId         String?
+  currentTaskTitle      String?
+  currentTaskStatus     String   @default("TODO")
+  currentObjective      String   @default("")
+  lastAssessmentSummary String?
+  nextRecommendedTask   String?
+  updatedAt             DateTime @updatedAt @default(now())
+
+  @@map("learning_states")
+}
+
+model UserSkill {
+  id                 String    @id
+  userId             String
+  skillId            String
+  skillName          String
+  category           String    @default("General")
+  level              Int       @default(0)
+  notes              String?
+  lastDemonstratedAt DateTime?
+  updatedAt          DateTime  @updatedAt @default(now())
+
+  @@unique([userId, skillId])
+  @@map("user_skills")
+}
+
+model UserTaskProgress {
+  id             String    @id
+  userId         String
+  taskId         String
+  status         String    @default("TODO")
+  notes          String?
+  completionDate DateTime?
+  updatedAt      DateTime  @updatedAt @default(now())
+
+  @@unique([userId, taskId])
+  @@map("user_task_progress")
+}
+
+model UserProjectProgress {
+  id             String    @id
+  userId         String
+  projectId      String
+  status         String    @default("NOT_STARTED")
+  startDate      DateTime?
+  completionDate DateTime?
+  updatedAt      DateTime  @updatedAt @default(now())
+
+  @@unique([userId, projectId])
+  @@map("user_project_progress")
+}
+
+model Assessment {
+  id                  String   @id
+  userId              String
+  projectId           String?
+  projectTitle        String?
+  taskId              String?
+  taskTitle           String?
+  date                DateTime @default(now())
+  status              String   @default("PASSED")
+  summary             String
+  strengths           String[]
+  weaknesses          String[]
+  mistakes            String[]
+  conceptsToPractice  String[]
+  recommendedNextTask String?
+  aiTeacherName       String   @default("External AI")
+  rawAssessmentText   String?
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt @default(now())
+
+  @@map("assessments")
+}
+
+model JournalEntry {
+  id           String   @id
+  userId       String
+  projectId    String?
+  projectTitle String?
+  taskId       String?
+  taskTitle    String?
+  title        String
+  content      String
+  tags         String[]
+  date         DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt @default(now())
+
+  @@map("journal_entries")
+}
+
+model Evidence {
+  id          String   @id
+  userId      String
+  projectId   String?
+  projectTitle String?
+  taskId      String?
+  taskTitle   String?
+  title       String
+  description String?
+  url         String?
+  githubRepo  String?
+  commitUrl   String?
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt @default(now())
+
+  @@map("evidences")
+}

@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Test coverage
+coverage/
+
+# Environment & secrets (never commit real credentials)
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store
+*.log
+
+# Kubernetes: real secrets stay on the server, only the placeholder template is tracked
+k8s/secret.yaml
+
+# Note: public/ is NOT ignored. It contains real application assets served
+# verbatim by Vite (public/ -> dist/). The only tracked file is
+# public/assets/aistudio/.gitignore, which is an empty-directory marker
+# from the original AI Studio export and excludes everything under it.

@@ -1,0 +1,17 @@
+node_modules
+dist
+build
+coverage
+.git
+.gitignore
+*.log
+.env
+.env.*
+!.env.example
+Dockerfile
+docker-compose.yml
+k8s
+docs
+README.md
+bun.lock
+scripts
