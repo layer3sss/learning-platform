@@ -139,7 +139,9 @@ spec:
           # Local alternative: docker build -t ghcr.io/mauricevanlavieren-lab/learning-platform:latest .
           #   k3s ctr images import <saved-image.tar>   (or push to your own registry)
           image: ghcr.io/mauricevanlavieren-lab/learning-platform:latest
-          imagePullPolicy: IfNotPresent
+          # Always re-pull :latest so the CI rollout restart (self-hosted runner)
+          # picks up the newest GHCR push instead of a stale cached image.
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
               name: http

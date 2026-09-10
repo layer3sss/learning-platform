@@ -72,3 +72,29 @@ jobs:
           tags: ghcr.io/mauricevanlavieren-lab/learning-platform:pr-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Continuous deployment: runs on the self-hosted runner that lives on the
+  # k3s cluster server (kubectl is pre-configured there via ~/.kube/config).
+  # Triggers only when a fresh :latest image was actually published to GHCR.
+  # Note: we deliberately do NOT `kubectl apply -f k8s/learning-os.yaml` here —
+  # the tracked manifest contains an empty Secret placeholder that would
+  # clobber the real secret created on the server. A rollout restart is the
+  # safe, idempotent deploy for an immutable :latest tag.
+  deploy:
+    name: Deploy to k3s (rollout restart)
+    needs: build-and-test
+    runs-on: self-hosted
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Never run two deploys at the same time; queue instead of cancelling.
+    concurrency:
+      group: deploy-main
+      cancel-in-progress: false
+
+    steps:
+      - name: Rollout restart deployment
+        run: kubectl rollout restart deployment/learning-os-deployment -n devops-learning-os
+
+      - name: Wait for rollout to complete
+        run: kubectl rollout status deployment/learning-os-deployment -n devops-learning-os --timeout=180s

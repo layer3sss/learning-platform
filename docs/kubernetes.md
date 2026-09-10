@@ -41,6 +41,18 @@ Generate strong values with `openssl rand -hex 32`. If you change `POSTGRES_PASS
 
 ## Deployment Commands
 
+### Automated (CI/CD, preferred)
+
+Every push to `main` publishes the image to GHCR and then runs
+`kubectl rollout restart deployment/learning-os-deployment -n devops-learning-os`
+from the **self-hosted runner** on the cluster server, followed by
+`kubectl rollout status` (180s timeout). See `.github/workflows/ci.yml`.
+
+Requires: kubectl pre-configured on the runner (`~/.kube/config` pointing at the
+k3s cluster) and `imagePullPolicy: Always` on the app container (already set).
+
+### Manual
+
 ```bash
 # 1. Apply all manifests
 kubectl apply -f k8s/learning-os.yaml
@@ -54,4 +66,11 @@ kubectl rollout status deployment/learning-os-deployment -n devops-learning-os
 
 # 4. Check services
 kubectl get svc -n devops-learning-os
+```
+
+After applying the manifest (or after CI pushed a new `:latest` image), roll out manually with:
+
+```bash
+kubectl rollout restart deployment/learning-os-deployment -n devops-learning-os
+kubectl rollout status deployment/learning-os-deployment -n devops-learning-os --timeout=180s
 ```

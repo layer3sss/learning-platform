@@ -30,7 +30,7 @@ Instead of passive theory lectures, each level provides real missions where you 
 - **Authentication:** Multi-user isolation with salted bcrypt password hashing and JSON Web Tokens (JWT)
 - **Containerization:** Multi-stage `Dockerfile` (Prisma client generated at build time, non-root runtime user, built-in HEALTHCHECK)
 - **Target platform:** Kubernetes / k3s (`/k8s/learning-os.yaml`) — designed for a home-lab cluster with no external access
-- **CI/CD:** GitHub Actions workflow (`/.github/workflows/ci.yml`): typecheck, build, Docker image build
+- **CI/CD:** GitHub Actions workflow (`/.github/workflows/ci.yml`): typecheck, build, Docker image push to GHCR, then automatic `kubectl rollout restart deployment/learning-os-deployment -n devops-learning-os` on the self-hosted runner (cluster server)
 - **Testing:** `npm run test:smoke` runs a 70+ check API test suite against a live server (any mode)
 
 ## Curriculum
