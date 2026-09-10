@@ -4,7 +4,10 @@ import type {
   UserSkill,
   Assessment,
   JournalEntry,
-  Evidence
+  Evidence,
+  DatabaseStats,
+  OrphanCleanupResult,
+  ResetResult
 } from '../types.js';
 
 export interface UserRecord extends User {
@@ -86,6 +89,26 @@ export interface DataStore {
 
   // --- AI context ---
   generateAIContext(userId: string): Promise<unknown>;
+
+  // --- Progress reset & maintenance ---
+  /**
+   * Wipe all learning data for one user so they start from zero.
+   * The user account itself is kept. Learning state is re-initialized to the
+   * fresh-seed state (Level 0, first task) so the app behaves like a new user.
+   */
+  resetUserData(userId: string): Promise<ResetResult>;
+
+  /**
+   * Delete a user account together with all of its learning data.
+   * Returns the reset counts plus the deleted user row count.
+   */
+  deleteUser(userId: string): Promise<ResetResult>;
+
+  /** Storage footprint of the whole database (admin maintenance panel). */
+  getDatabaseStats(): Promise<DatabaseStats>;
+
+  /** Remove progress rows that reference users which no longer exist. */
+  cleanupOrphanedData(): Promise<OrphanCleanupResult>;
 
   // --- Lifecycle ---
   /** Verify the store is reachable/healthy. Throws on failure. */

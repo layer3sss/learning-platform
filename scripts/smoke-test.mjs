@@ -256,10 +256,36 @@ async function main() {
   check('markdown contains instructions', aiCtx.data?.instructionsForAI?.includes('mentor') === true);
   check('demonstrated skills listed', Array.isArray(aiCtx.data?.demonstratedSkills) && aiCtx.data.demonstratedSkills.length > 0);
 
+  // ---------- Progress reset ----------
+  console.log('\nProgress reset');
+  const resetNoAuth = await req('DELETE', '/api/progress');
+  check('reset without token -> 401', resetNoAuth.status === 401, `got ${resetNoAuth.status}`);
+
+  const resetNoConfirm = await req('DELETE', '/api/progress', { token: userToken, body: {} });
+  check('reset without confirm -> 400', resetNoConfirm.status === 400, `got ${resetNoConfirm.status}`);
+
+  const resetOk = await req('DELETE', '/api/progress', { token: userToken, body: { confirm: true } });
+  check('reset with confirm -> 200', resetOk.status === 200, `got ${resetOk.status} ${JSON.stringify(resetOk.data)}`);
+  check('reset reports deleted assessments >= 1', (resetOk.data?.deleted?.assessments ?? 0) >= 1);
+  check('reset reports deleted journal entries >= 2', (resetOk.data?.deleted?.journalEntries ?? 0) >= 2, `got ${resetOk.data?.deleted?.journalEntries}`);
+
+  const lsAfterReset = await req('GET', '/api/learning-state', { token: userToken });
+  check('learning state re-seeded after reset (level 0)', lsAfterReset.data?.currentRoadmapLevel === 0);
+  check('learning state re-seeded (fresh task)', lsAfterReset.data?.currentTaskId === firstTask.id, `got ${lsAfterReset.data?.currentTaskId}`);
+
+  const assessAfterReset = await req('GET', '/api/assessments', { token: userToken });
+  check('assessments empty after reset', Array.isArray(assessAfterReset.data) && assessAfterReset.data.length === 0, `got ${assessAfterReset.data?.length}`);
+
+  const skillsAfterReset = await req('GET', '/api/skills', { token: userToken });
+  check('skills re-seeded after reset', Array.isArray(skillsAfterReset.data?.userSkills) && skillsAfterReset.data.userSkills.length > 0);
+
   // ---------- Admin ----------
   console.log('\nAdmin & authorization');
   const adminForbidden = await req('GET', '/api/admin/users', { token: userToken });
   check('non-admin blocked from admin route -> 403', adminForbidden.status === 403, `got ${adminForbidden.status}`);
+
+  const adminDbForbidden = await req('GET', '/api/admin/database', { token: userToken });
+  check('non-admin blocked from database stats -> 403', adminDbForbidden.status === 403, `got ${adminDbForbidden.status}`);
 
   const demoAdmin = await req('POST', '/api/auth/switch-demo', { body: { targetRole: 'ADMIN' } });
   check('switch-demo to admin -> 200', demoAdmin.status === 200, `got ${demoAdmin.status}`);
@@ -269,6 +295,60 @@ async function main() {
   const adminOk = await req('GET', '/api/admin/users', { token: adminToken });
   check('admin can list users', adminOk.status === 200 && Array.isArray(adminOk.data));
   check('user list hides password hashes', adminOk.data.every(u => !('password' in u) && !('passwordHash' in u)));
+
+  // ---------- Admin: database maintenance ----------
+  console.log('\nAdmin database maintenance');
+  const dbStats = await req('GET', '/api/admin/database', { token: adminToken });
+  check('GET /api/admin/database -> 200', dbStats.status === 200, `got ${dbStats.status}`);
+  check('database stats report provider', ['memory', 'postgres'].includes(dbStats.data?.provider), JSON.stringify(dbStats.data?.provider));
+  check('database stats report total rows', typeof dbStats.data?.totalRows === 'number' && dbStats.data.totalRows > 0);
+  check('database stats report total size', typeof dbStats.data?.totalSizeBytes === 'number' && dbStats.data.totalSizeBytes >= 0);
+  check('database stats list tables', Array.isArray(dbStats.data?.tables) && dbStats.data.tables.length >= 8);
+  check('database stats list users', Array.isArray(dbStats.data?.users) && dbStats.data.users.length > 0);
+  check('database stats hide user emails', dbStats.data.users.every(u => typeof u.email === 'string' && u.email.length > 0));
+
+  const cleanup = await req('POST', '/api/admin/database/cleanup', { token: adminToken, body: {} });
+  check('POST cleanup -> 200', cleanup.status === 200, `got ${cleanup.status}`);
+  check('cleanup reports totals', typeof cleanup.data?.totalDeleted === 'number' && typeof cleanup.data?.orphanedUsersFound === 'number');
+
+  // Admin reset & delete on a dedicated victim user
+  const victimReg = await req('POST', '/api/auth/register', {
+    body: { name: 'Reset Victim', email: `victim-${uniq}@example.com`, password: 'secret123' }
+  });
+  check('victim user registered', victimReg.status === 201, `got ${victimReg.status}`);
+  const victimToken = victimReg.data?.token;
+  const victimId = victimReg.data?.user?.id;
+
+  await req('PUT', '/api/skills/skill-linux', { token: victimToken, body: { level: 5 } });
+  await req('POST', '/api/journal', { token: victimToken, body: { title: 'Victim note', content: 'to be erased', tags: [] } });
+
+  const adminResetNoConfirm = await req('POST', `/api/admin/users/${victimId}/reset`, { token: adminToken, body: {} });
+  check('admin reset without confirm -> 400', adminResetNoConfirm.status === 400, `got ${adminResetNoConfirm.status}`);
+
+  const adminReset = await req('POST', `/api/admin/users/${victimId}/reset`, { token: adminToken, body: { confirm: true } });
+  check('admin reset -> 200', adminReset.status === 200, `got ${adminReset.status}`);
+  check('admin reset reports deleted journal entries >= 2', (adminReset.data?.deleted?.journalEntries ?? 0) >= 2, `got ${adminReset.data?.deleted?.journalEntries}`);
+
+  const victimState = await req('GET', '/api/learning-state', { token: victimToken });
+  check('victim state re-seeded after admin reset', victimState.data?.currentRoadmapLevel === 0);
+
+  const selfDelete = await req('DELETE', `/api/admin/users/${demoAdmin.data?.user?.id}`, { token: adminToken, body: { confirm: true } });
+  check('admin cannot delete own account -> 400', selfDelete.status === 400, `got ${selfDelete.status}`);
+
+  const victimDelete = await req('DELETE', `/api/admin/users/${victimId}`, { token: adminToken, body: { confirm: true } });
+  check('admin delete user -> 200', victimDelete.status === 200, `got ${victimDelete.status}`);
+  check('delete result counts the user row', victimDelete.data?.deleted?.user === 1);
+
+  const victimMe = await req('GET', '/api/auth/me', { token: victimToken });
+  check('deleted user token rejected -> 401', victimMe.status === 401, `got ${victimMe.status}`);
+
+  const victimLogin = await req('POST', '/api/auth/login', { body: { email: `victim-${uniq}@example.com`, password: 'secret123' } });
+  check('deleted user cannot log in -> 401', victimLogin.status === 401, `got ${victimLogin.status}`);
+
+  // Deleting a user must not leave orphaned progress rows behind.
+  const cleanupAfterDelete = await req('POST', '/api/admin/database/cleanup', { token: adminToken, body: {} });
+  check('no orphaned rows after user deletion', cleanupAfterDelete.status === 200 && cleanupAfterDelete.data?.totalDeleted === 0,
+    JSON.stringify(cleanupAfterDelete.data));
 
   if (!DIRTY) {
     const demoLearner = await req('POST', '/api/auth/switch-demo', { body: { targetRole: 'USER' } });

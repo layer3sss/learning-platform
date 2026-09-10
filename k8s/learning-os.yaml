@@ -135,10 +135,10 @@ spec:
     spec:
       containers:
         - name: learning-os
-          # Build & load locally first (no external registry needed on a homelab):
-          #   docker build -t devops-learning-os:latest .
+          # Pull from GitHub Container Registry (published by CI on every push to main).
+          # Local alternative: docker build -t ghcr.io/mauricevanlavieren-lab/learning-platform:latest .
           #   k3s ctr images import <saved-image.tar>   (or push to your own registry)
-          image: devops-learning-os:latest
+          image: ghcr.io/mauricevanlavieren-lab/learning-platform:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000

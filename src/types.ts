@@ -149,6 +149,75 @@ export interface AuthSession {
   token: string;
 }
 
+/**
+ * Result of wiping a user's learning data (progress reset or account deletion).
+ * Counts reflect the number of rows removed per table.
+ */
+export interface ResetResult {
+  deleted: {
+    learningState: number;
+    skills: number;
+    taskProgress: number;
+    projectProgress: number;
+    assessments: number;
+    journalEntries: number;
+    evidences: number;
+    /** Only set when the user account itself was deleted. */
+    user?: number;
+  };
+}
+
+/** Storage usage of a single database table. */
+export interface TableStat {
+  name: string;
+  rowCount: number;
+  /** Bytes on disk (Postgres), or an estimate (in-memory mode). */
+  sizeBytes: number;
+}
+
+/** How much data a single user accounts for, across all progress tables. */
+export interface UserStorageStat {
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  createdAt: string;
+  /** Most recent update across the user's progress rows, if known. */
+  lastActivity?: string;
+  totalRows: number;
+  breakdown: {
+    skills: number;
+    taskProgress: number;
+    projectProgress: number;
+    assessments: number;
+    journalEntries: number;
+    evidences: number;
+  };
+}
+
+/** Overall database footprint, as shown in the admin maintenance panel. */
+export interface DatabaseStats {
+  provider: 'memory' | 'postgres';
+  databaseName?: string;
+  serverVersion?: string;
+  totalSizeBytes: number;
+  totalRows: number;
+  totalUsers: number;
+  tables: TableStat[];
+  users: UserStorageStat[];
+  checkedAt: string;
+}
+
+/** Result of the admin orphaned-data cleanup job. */
+export interface OrphanCleanupResult {
+  provider: 'memory' | 'postgres';
+  /** Distinct userIds that had orphaned rows. */
+  orphanedUsersFound: number;
+  /** Rows removed per table. */
+  deletedRows: Record<string, number>;
+  totalDeleted: number;
+}
+
 export interface AIContextOutput {
   learnerName: string;
   currentLevel: string;

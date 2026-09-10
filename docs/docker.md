@@ -16,8 +16,10 @@ The `Dockerfile` employs a 2-stage build:
 ## Building the Image
 
 ```bash
-docker build -t devops-learning-os:latest .
+docker build -t ghcr.io/mauricevanlavieren-lab/learning-platform:latest .
 ```
+
+CI publishes this same image to GHCR on every push to `main` (tags: `latest` + `sha-<commit>`), so on the cluster you can also just pull it instead of building locally.
 
 ## Running with Docker Compose
 

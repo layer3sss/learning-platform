@@ -23,7 +23,7 @@ Instead of passive theory lectures, each level provides real missions where you 
 ## Architecture Overview
 
 - **Frontend:** React 19 + TypeScript + Tailwind CSS v4 + Lucide Icons
-- **Backend:** Node.js Express with typed REST API endpoints (`/api/auth/*`, `/api/learning-state`, `/api/roadmap`, `/api/skills`, `/api/assessments`, `/api/journal`, `/api/evidence`, `/api/ai-context`)
+- **Backend:** Node.js Express with typed REST API endpoints (`/api/auth/*`, `/api/learning-state`, `/api/roadmap`, `/api/skills`, `/api/assessments`, `/api/journal`, `/api/evidence`, `/api/ai-context`, `/api/progress`, `/api/admin/*`)
 - **Data storage — two interchangeable modes, selected by environment:**
   - `DATABASE_URL` set → **PostgreSQL via Prisma ORM** (persistent, multi-user safe, multi-replica safe). Tables are auto-created on first boot; no migration step required.
   - `DATABASE_URL` unset → **In-memory fallback** (zero-friction local dev and preview; data resets on restart)
@@ -117,6 +117,18 @@ You can also register any new user account via the **Sign In / Create Account** 
 
 ---
 
+## Resetting Progress & Database Maintenance
+
+**Learners** can wipe their own progress and start from Level 0 via **Settings → Danger Zone → Reset Progress** (API: `DELETE /api/progress` with `{ confirm: true }`). This erases task/project statuses, skill levels, assessments, journal entries, and evidence; the account itself is kept and a fresh Level 0 state is seeded.
+
+**Admins** get a **Database Maintenance** panel in the Admin view showing total storage size, per-table row counts, and per-user storage usage, plus three actions (API: `/api/admin/database`, `/api/admin/users/:id/reset`, `DELETE /api/admin/users/:id`):
+
+- **Reset user progress** — erase a specific user's learning data (keeps the account)
+- **Delete user** — remove an account together with all of its data
+- **Orphaned data cleanup** — remove progress rows that reference users which no longer exist (e.g. after manual database pruning)
+
+---
+
 ## Testing
 
 Start the server, then run the smoke suite against it:
@@ -147,7 +159,11 @@ Access the app at `http://localhost:3000`.
 Deploy to your local home cluster:
 
 ```bash
-docker build -t devops-learning-os:latest .
+# Option A: pull the image CI published to GHCR (no local build needed)
+#   ghcr.io/mauricevanlavieren-lab/learning-platform:latest
+
+# Option B: build locally instead
+docker build -t ghcr.io/mauricevanlavieren-lab/learning-platform:latest .
 
 # One-time: create the real secret on the server (k8s/secret.yaml is git-ignored)
 cp k8s/secret.example.yaml k8s/secret.yaml   # then edit with real values

@@ -7,7 +7,11 @@ import type {
   UserSkill,
   Assessment,
   JournalEntry,
-  Evidence
+  Evidence,
+  DatabaseStats,
+  OrphanCleanupResult,
+  ResetResult,
+  UserStorageStat
 } from '../types.js';
 import type {
   DataStore,
@@ -420,6 +424,157 @@ export class MemoryStore implements DataStore {
     });
   }
 
+  // --- Progress reset & maintenance ---
+  private countUserData(userId: string): ResetResult['deleted'] {
+    return {
+      learningState: this.learningStates.has(userId) ? 1 : 0,
+      skills: (this.userSkills.get(userId) || []).length,
+      taskProgress: (this.userTasks.get(userId) || []).length,
+      projectProgress: (this.userProjects.get(userId) || []).length,
+      assessments: (this.assessments.get(userId) || []).length,
+      journalEntries: (this.journalEntries.get(userId) || []).length,
+      evidences: (this.evidences.get(userId) || []).length
+    };
+  }
+
+  public async resetUserData(userId: string): Promise<ResetResult> {
+    const deleted = this.countUserData(userId);
+
+    this.learningStates.delete(userId);
+    this.userSkills.delete(userId);
+    this.userTasks.delete(userId);
+    this.userProjects.delete(userId);
+    this.assessments.delete(userId);
+    this.journalEntries.delete(userId);
+    this.evidences.delete(userId);
+
+    // Re-initialize so the user lands in the same fresh state as a new registration.
+    this.initLearnerState(userId);
+
+    return { deleted };
+  }
+
+  public async deleteUser(userId: string): Promise<ResetResult> {
+    const deleted = this.countUserData(userId);
+
+    // Wipe everything directly (no re-seed — resetUserData would otherwise
+    // recreate rows that would end up orphaned once the user row is gone).
+    this.learningStates.delete(userId);
+    this.userSkills.delete(userId);
+    this.userTasks.delete(userId);
+    this.userProjects.delete(userId);
+    this.assessments.delete(userId);
+    this.journalEntries.delete(userId);
+    this.evidences.delete(userId);
+    this.users.delete(userId);
+
+    return { deleted: { ...deleted, user: 1 } };
+  }
+
+  public async getDatabaseStats(): Promise<DatabaseStats> {
+    const now = new Date().toISOString();
+    const users = Array.from(this.users.values());
+
+    const tables: DatabaseStats['tables'] = [
+      { name: 'users', rowCount: users.length, sizeBytes: users.length * 512 },
+      { name: 'learning_states', rowCount: this.learningStates.size, sizeBytes: this.learningStates.size * 1024 },
+      { name: 'user_skills', rowCount: countMapRows(this.userSkills), sizeBytes: countMapRows(this.userSkills) * 256 },
+      { name: 'user_task_progress', rowCount: countMapRows(this.userTasks), sizeBytes: countMapRows(this.userTasks) * 256 },
+      { name: 'user_project_progress', rowCount: countMapRows(this.userProjects), sizeBytes: countMapRows(this.userProjects) * 256 },
+      { name: 'assessments', rowCount: countMapRows(this.assessments), sizeBytes: countMapRows(this.assessments) * 2048 },
+      { name: 'journal_entries', rowCount: countMapRows(this.journalEntries), sizeBytes: countMapRows(this.journalEntries) * 1024 },
+      { name: 'evidences', rowCount: countMapRows(this.evidences), sizeBytes: countMapRows(this.evidences) * 1024 }
+    ];
+
+    const userStats: UserStorageStat[] = users.map(u => {
+      const breakdown = {
+        skills: (this.userSkills.get(u.id) || []).length,
+        taskProgress: (this.userTasks.get(u.id) || []).length,
+        projectProgress: (this.userProjects.get(u.id) || []).length,
+        assessments: (this.assessments.get(u.id) || []).length,
+        journalEntries: (this.journalEntries.get(u.id) || []).length,
+        evidences: (this.evidences.get(u.id) || []).length
+      };
+      const totalRows = Object.values(breakdown).reduce((a, b) => a + b, 0) + (this.learningStates.has(u.id) ? 1 : 0);
+      const timestamps = [
+        ...(this.userSkills.get(u.id) || []).map(s => s.lastDemonstratedAt),
+        ...(this.assessments.get(u.id) || []).map(a => a.date),
+        ...(this.journalEntries.get(u.id) || []).map(j => j.date),
+        ...(this.evidences.get(u.id) || []).map(e => e.date),
+        this.learningStates.get(u.id)?.updatedAt
+      ].filter((t): t is string => typeof t === 'string');
+      const lastActivity = timestamps.length > 0
+        ? timestamps.reduce((latest, t) => (t > latest ? t : latest))
+        : undefined;
+      return {
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        createdAt: u.createdAt,
+        lastActivity,
+        totalRows,
+        breakdown
+      };
+    });
+
+    const totalRows = tables.reduce((sum, t) => sum + t.rowCount, 0);
+    return {
+      provider: 'memory',
+      totalSizeBytes: tables.reduce((sum, t) => sum + t.sizeBytes, 0),
+      totalRows,
+      totalUsers: users.length,
+      tables,
+      users: userStats,
+      checkedAt: now
+    };
+  }
+
+  public async cleanupOrphanedData(): Promise<OrphanCleanupResult> {
+    const tables: [string, Map<string, unknown[]>][] = [
+      ['user_skills', this.userSkills],
+      ['user_task_progress', this.userTasks],
+      ['user_project_progress', this.userProjects],
+      ['assessments', this.assessments],
+      ['journal_entries', this.journalEntries],
+      ['evidences', this.evidences]
+    ];
+
+    const deletedRows: Record<string, number> = {};
+    const orphanedUsers = new Set<string>();
+    let totalDeleted = 0;
+
+    for (const [name, map] of tables) {
+      let removed = 0;
+      for (const userId of Array.from(map.keys())) {
+        if (!this.users.has(userId)) {
+          removed += (map.get(userId) || []).length;
+          map.delete(userId);
+          orphanedUsers.add(userId);
+        }
+      }
+      if (removed > 0) deletedRows[name] = removed;
+      totalDeleted += removed;
+    }
+
+    // Learning states are keyed by userId directly.
+    for (const userId of Array.from(this.learningStates.keys())) {
+      if (!this.users.has(userId)) {
+        this.learningStates.delete(userId);
+        orphanedUsers.add(userId);
+        deletedRows['learning_states'] = (deletedRows['learning_states'] || 0) + 1;
+        totalDeleted += 1;
+      }
+    }
+
+    return {
+      provider: 'memory',
+      orphanedUsersFound: orphanedUsers.size,
+      deletedRows,
+      totalDeleted
+    };
+  }
+
   // --- Lifecycle ---
   public async healthCheck(): Promise<void> {
     // In-memory store is always "healthy".
@@ -428,6 +583,13 @@ export class MemoryStore implements DataStore {
   public async close(): Promise<void> {
     // Nothing to release.
   }
+}
+
+/** Per-user row counts helper for Map<string, T[]> structures. */
+function countMapRows<T>(map: Map<string, T[]>): number {
+  let total = 0;
+  for (const list of map.values()) total += list.length;
+  return total;
 }
 
 /**

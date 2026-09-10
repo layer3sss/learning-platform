@@ -407,6 +407,89 @@ app.get('/api/admin/users', requireAuth, requireAdmin, async (_req: Authenticate
   }
 });
 
+// Admin: Database Maintenance — storage stats
+app.get('/api/admin/database', requireAuth, requireAdmin, async (_req: AuthenticatedRequest, res) => {
+  try {
+    const stats = await db.getDatabaseStats();
+    res.json(stats);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to collect database stats.';
+    res.status(500).json({ error: message });
+  }
+});
+
+// Admin: Database Maintenance — remove rows that belong to deleted users
+app.post('/api/admin/database/cleanup', requireAuth, requireAdmin, async (_req: AuthenticatedRequest, res) => {
+  try {
+    const result = await db.cleanupOrphanedData();
+    res.json(result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to clean up orphaned data.';
+    res.status(500).json({ error: message });
+  }
+});
+
+// Admin: Database Maintenance — wipe a user's learning data (keeps the account)
+app.post('/api/admin/users/:userId/reset', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId || !req.body?.confirm) {
+      res.status(400).json({ error: 'A confirm flag is required to reset a user\'s progress.' });
+      return;
+    }
+    const user = await db.getUserById(userId);
+    if (!user) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+    const result = await db.resetUserData(userId);
+    res.json({ message: `Progress for ${user.email} has been reset.`, ...result });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to reset user progress.';
+    res.status(500).json({ error: message });
+  }
+});
+
+// Admin: Database Maintenance — delete a user account and all of its data
+app.delete('/api/admin/users/:userId', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId || !req.body?.confirm) {
+      res.status(400).json({ error: 'A confirm flag is required to delete a user.' });
+      return;
+    }
+    if (userId === req.user!.id) {
+      res.status(400).json({ error: 'Administrators cannot delete their own account.' });
+      return;
+    }
+    const user = await db.getUserById(userId);
+    if (!user) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+    const result = await db.deleteUser(userId);
+    res.json({ message: `Account ${user.email} and all of its data have been deleted.`, ...result });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to delete user.';
+    res.status(500).json({ error: message });
+  }
+});
+
+// Progress Reset: Wipe the authenticated user's own learning data
+app.delete('/api/progress', requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.body?.confirm) {
+      res.status(400).json({ error: 'A confirm flag is required to reset your progress.' });
+      return;
+    }
+    const result = await db.resetUserData(req.user!.id);
+    res.json({ message: 'All learning progress has been reset. You are starting from Level 0.', ...result });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to reset progress.';
+    res.status(500).json({ error: message });
+  }
+});
+
 // Unknown API routes -> JSON 404 (must come after all API routes)
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'API endpoint not found.' });

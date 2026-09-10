@@ -8,7 +8,10 @@ import type {
   AIContextOutput,
   TaskStatus,
   Skill,
-  UserSkill
+  UserSkill,
+  DatabaseStats,
+  OrphanCleanupResult,
+  ResetResult
 } from '../types.js';
 
 const TOKEN_KEY = 'devops_learning_os_jwt';
@@ -122,5 +125,27 @@ export const api = {
   getAIContext: () => request<AIContextOutput>('/api/ai-context'),
 
   // Admin
-  getAdminUsers: () => request<User[]>('/api/admin/users')
+  getAdminUsers: () => request<User[]>('/api/admin/users'),
+
+  // Admin: Database maintenance
+  getDatabaseStats: () => request<DatabaseStats>('/api/admin/database'),
+  cleanupOrphanedData: () =>
+    request<OrphanCleanupResult>('/api/admin/database/cleanup', { method: 'POST', body: JSON.stringify({}) }),
+  adminResetUser: (userId: string) =>
+    request<ResetResult & { message: string }>(`/api/admin/users/${userId}/reset`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true })
+    }),
+  adminDeleteUser: (userId: string) =>
+    request<ResetResult & { message: string }>(`/api/admin/users/${userId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm: true })
+    }),
+
+  // Self-service progress reset
+  resetMyProgress: () =>
+    request<ResetResult & { message: string }>('/api/progress', {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm: true })
+    })
 };

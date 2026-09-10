@@ -9,7 +9,11 @@ import type {
   UserSkill,
   Assessment,
   JournalEntry,
-  Evidence
+  Evidence,
+  DatabaseStats,
+  OrphanCleanupResult,
+  ResetResult,
+  UserStorageStat
 } from '../types.js';
 import type {
   DataStore,
@@ -780,7 +784,202 @@ export class PrismaStore implements DataStore {
     });
   }
 
-  // --- Lifecycle ---
+  // --- Progress reset & maintenance ---
+  public async resetUserData(userId: string): Promise<ResetResult> {
+    await this.ensureReady();
+    const [skills, tasks, projects, assessments, journals, evidences, states] = await this.prisma.$transaction([
+      this.prisma.userSkill.deleteMany({ where: { userId } }),
+      this.prisma.userTaskProgress.deleteMany({ where: { userId } }),
+      this.prisma.userProjectProgress.deleteMany({ where: { userId } }),
+      this.prisma.assessment.deleteMany({ where: { userId } }),
+      this.prisma.journalEntry.deleteMany({ where: { userId } }),
+      this.prisma.evidence.deleteMany({ where: { userId } }),
+      this.prisma.learningState.deleteMany({ where: { userId } })
+    ]);
+
+    // Give the user a fresh seed state, identical to a new registration.
+    await this.initLearnerState(userId);
+
+    return {
+      deleted: {
+        learningState: states.count,
+        skills: skills.count,
+        taskProgress: tasks.count,
+        projectProgress: projects.count,
+        assessments: assessments.count,
+        journalEntries: journals.count,
+        evidences: evidences.count
+      }
+    };
+  }
+
+  public async deleteUser(userId: string): Promise<ResetResult> {
+    await this.ensureReady();
+
+    // Wipe everything directly (no re-seed — resetUserData would otherwise
+    // recreate rows that would end up orphaned once the user row is gone).
+    const [skills, tasks, projects, assessments, journals, evidences, states] = await this.prisma.$transaction([
+      this.prisma.userSkill.deleteMany({ where: { userId } }),
+      this.prisma.userTaskProgress.deleteMany({ where: { userId } }),
+      this.prisma.userProjectProgress.deleteMany({ where: { userId } }),
+      this.prisma.assessment.deleteMany({ where: { userId } }),
+      this.prisma.journalEntry.deleteMany({ where: { userId } }),
+      this.prisma.evidence.deleteMany({ where: { userId } }),
+      this.prisma.learningState.deleteMany({ where: { userId } })
+    ]);
+    await this.prisma.user.delete({ where: { id: userId } });
+
+    return {
+      deleted: {
+        learningState: states.count,
+        skills: skills.count,
+        taskProgress: tasks.count,
+        projectProgress: projects.count,
+        assessments: assessments.count,
+        journalEntries: journals.count,
+        evidences: evidences.count,
+        user: 1
+      }
+    };
+  }
+
+  public async getDatabaseStats(): Promise<DatabaseStats> {
+    await this.ensureReady();
+
+    const users = await this.prisma.user.findMany({ orderBy: { createdAt: 'asc' } });
+
+    const [skillRows, taskRows, projectRows, assessmentRows, journalRows, evidenceRows, activityRows, sizeRows, versionRows] = await Promise.all([
+      this.prisma.userSkill.groupBy({ by: ['userId'], _count: { _all: true } }),
+      this.prisma.userTaskProgress.groupBy({ by: ['userId'], _count: { _all: true } }),
+      this.prisma.userProjectProgress.groupBy({ by: ['userId'], _count: { _all: true } }),
+      this.prisma.assessment.groupBy({ by: ['userId'], _count: { _all: true } }),
+      this.prisma.journalEntry.groupBy({ by: ['userId'], _count: { _all: true } }),
+      this.prisma.evidence.groupBy({ by: ['userId'], _count: { _all: true } }),
+      this.prisma.$queryRaw<Array<{ userId: string; lastActivity: Date }>>`
+        SELECT "userId", MAX(ts) AS "lastActivity" FROM (
+          SELECT "userId", "updatedAt" AS ts FROM user_skills
+          UNION ALL SELECT "userId", "updatedAt" FROM user_task_progress
+          UNION ALL SELECT "userId", "updatedAt" FROM user_project_progress
+          UNION ALL SELECT "userId", date FROM assessments
+          UNION ALL SELECT "userId", date FROM journal_entries
+          UNION ALL SELECT "userId", date FROM evidences
+        ) t GROUP BY "userId"`,
+      this.prisma.$queryRaw<Array<{ size: bigint }>>`
+        SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::bigint AS size
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r'`,
+      this.prisma.$queryRaw<Array<{ version: string }>>`SELECT version() AS version`
+    ]);
+
+    const countBy = (rows: Array<{ userId: string; _count: { _all: number } }>) =>
+      new Map(rows.map(r => [r.userId, r._count._all]));
+    const skillCounts = countBy(skillRows);
+    const taskCounts = countBy(taskRows);
+    const projectCounts = countBy(projectRows);
+    const assessmentCounts = countBy(assessmentRows);
+    const journalCounts = countBy(journalRows);
+    const evidenceCounts = countBy(evidenceRows);
+    const activityMap = new Map(activityRows.map(r => [r.userId, r.lastActivity]));
+
+    const userStats: UserStorageStat[] = users.map(u => {
+      const breakdown = {
+        skills: skillCounts.get(u.id) || 0,
+        taskProgress: taskCounts.get(u.id) || 0,
+        projectProgress: projectCounts.get(u.id) || 0,
+        assessments: assessmentCounts.get(u.id) || 0,
+        journalEntries: journalCounts.get(u.id) || 0,
+        evidences: evidenceCounts.get(u.id) || 0
+      };
+      return {
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        createdAt: u.createdAt.toISOString(),
+        lastActivity: activityMap.get(u.id)?.toISOString(),
+        totalRows: Object.values(breakdown).reduce((a, b) => a + b, 0),
+        breakdown
+      };
+    });
+
+    const tableCounts = await Promise.all([
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM users`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM learning_states`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM user_skills`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM user_task_progress`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM user_project_progress`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM assessments`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM journal_entries`,
+      this.prisma.$queryRaw<Array<{ count: number }>>`SELECT COUNT(*)::int AS count FROM evidences`
+    ]);
+    const tableNames = ['users', 'learning_states', 'user_skills', 'user_task_progress', 'user_project_progress', 'assessments', 'journal_entries', 'evidences'];
+    const tables = tableNames.map((name, i) => ({ name, rowCount: tableCounts[i][0]?.count ?? 0, sizeBytes: 0 }));
+
+    const totalSize = Number(sizeRows[0]?.size ?? 0);
+    // Distribute the physical size across tables proportionally to row count
+    // so the per-table display is meaningful even though Postgres only
+    // exposes sizes at table level.
+    const grandTotalRows = tables.reduce((sum, t) => sum + t.rowCount, 0);
+    if (grandTotalRows > 0) {
+      for (const t of tables) {
+        t.sizeBytes = Math.round((t.rowCount / grandTotalRows) * totalSize);
+      }
+    }
+
+    const dbNameRows = await this.prisma.$queryRaw<Array<{ db: string }>>`SELECT current_database() AS db`;
+
+    return {
+      provider: 'postgres',
+      databaseName: dbNameRows[0]?.db,
+      serverVersion: versionRows[0]?.version?.split(' ').slice(0, 2).join(' '),
+      totalSizeBytes: totalSize,
+      totalRows: grandTotalRows,
+      totalUsers: users.length,
+      tables,
+      users: userStats,
+      checkedAt: new Date().toISOString()
+    };
+  }
+
+  public async cleanupOrphanedData(): Promise<OrphanCleanupResult> {
+    await this.ensureReady();
+
+    // No foreign keys exist between progress tables and users (by design in
+    // this homelab schema), so orphan cleanup is done with raw SQL anti-joins.
+    const orphanUsersRows = await this.prisma.$queryRaw<Array<{ userId: string }>>`
+      SELECT DISTINCT "userId" FROM (
+        SELECT "userId" FROM user_skills
+        UNION ALL SELECT "userId" FROM user_task_progress
+        UNION ALL SELECT "userId" FROM user_project_progress
+        UNION ALL SELECT "userId" FROM assessments
+        UNION ALL SELECT "userId" FROM journal_entries
+        UNION ALL SELECT "userId" FROM evidences
+        UNION ALL SELECT "userId" FROM learning_states
+      ) t
+      WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = t."userId")`;
+    const orphanedUsersFound = orphanUsersRows.length;
+
+    const deletedRows: Record<string, number> = {};
+    let totalDeleted = 0;
+
+    const cleanTable = async (table: string) => {
+      const deleted = await this.prisma.$executeRawUnsafe(
+        `DELETE FROM "${table}" t WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = t."userId")`
+      );
+      if (deleted > 0) {
+        deletedRows[table] = deleted;
+        totalDeleted += deleted;
+      }
+    };
+
+    for (const table of ['user_skills', 'user_task_progress', 'user_project_progress', 'assessments', 'journal_entries', 'evidences', 'learning_states']) {
+      await cleanTable(table);
+    }
+
+    return { provider: 'postgres', orphanedUsersFound, deletedRows, totalDeleted };
+  }
+
   public async healthCheck(): Promise<void> {
     await this.ensureReady();
     await this.prisma.$queryRaw`SELECT 1`;

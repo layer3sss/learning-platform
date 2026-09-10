@@ -69,6 +69,6 @@ jobs:
         with:
           context: .
           push: false
-          tags: devops-learning-os:pr-test
+          tags: ghcr.io/mauricevanlavieren-lab/learning-platform:pr-test
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -187,7 +187,7 @@ export default function App() {
           )}
 
           {currentView === 'settings' && (
-            <SettingsView user={user} />
+            <SettingsView user={user} onProgressReset={loadUserData} />
           )}
         </main>
       </div>
